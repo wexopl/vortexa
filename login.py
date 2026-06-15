@@ -2,7 +2,6 @@ import os
 import sys
 import requests
 import datetime
-import re
 from playwright.sync_api import sync_playwright, TimeoutError
 
 def get_beijing_time():
@@ -10,33 +9,6 @@ def get_beijing_time():
     utc_now = datetime.datetime.now(datetime.timezone.utc)
     beijing_time = utc_now + datetime.timedelta(hours=8)
     return beijing_time.strftime("%Y-%m-%d %H:%M:%S")
-
-def update_readme_time(status_text):
-    """自动寻找 README.md 中的占位符并精准覆盖运行时间和状态"""
-    readme_path = "README.md"
-    if not os.path.exists(readme_path):
-        print("未找到 README.md 文件，跳过时间更新。")
-        return
-        
-    current_time = get_beijing_time()
-    
-    with open(readme_path, "r", encoding="utf-8") as f:
-        content = f.read()
-        
-    # 使用正则表达式匹配两个标签及其之间的所有内容（包括换行符）
-    pattern = r"().*?()"
-    
-    # re.DOTALL 使得 '.' 可以匹配跨行换行符，确保清理干净
-    if re.search(pattern, content, flags=re.DOTALL):
-        # \1 和 \2 代表保留原来的 START 和 END 标签，中间插入最新时间
-        new_text = fr"\1{chr(10)}🕒 最近运行时间：<code>{current_time}</code> ({status_text}){chr(10)}\2"
-        new_content = re.sub(pattern, new_text, content, flags=re.DOTALL)
-        
-        with open(readme_path, "w", encoding="utf-8") as f:
-            f.write(new_content)
-        print("README.md 运行时间已成功在本地更新（旧时间已彻底清除）。")
-    else:
-        print("未在 README.md 中找到指定的时间占位符标签，请检查 README 配置。")
 
 def send_telegram_message(message, image_path=None):
     """发送 Telegram 推送消息（支持可选的图片截图）"""
@@ -56,6 +28,7 @@ def send_telegram_message(message, image_path=None):
                 "caption": message,
                 "parse_mode": "HTML"
             }
+            # 以二进制读取图片并上传
             with open(image_path, "rb") as photo:
                 response = requests.post(url, data=data, files={"photo": photo}, timeout=20)
         else:
@@ -85,12 +58,11 @@ def run(playwright):
         msg = f"❌ <b>执行失败</b>\n未找到 VORTEXA_USER 或 VORTEXA_PASS 环境变量。\n🕒 时间: <code>{current_time}</code>"
         print(msg)
         send_telegram_message(msg)
-        update_readme_time("❌ 失败：配置缺失")
         sys.exit(1)
 
     # 启动无头浏览器
     browser = playwright.chromium.launch(headless=True)
-    # 配置虚拟浏览器的窗口大小，确保截图比例正常
+    # 配置虚拟浏览器的窗口大小，确保截图比例正常（1280x720 桌面比例）
     context = browser.new_context(
         viewport={'width': 1280, 'height': 720},
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -111,7 +83,7 @@ def run(playwright):
         # 等待 5 秒确保登录请求完整发出，页面完全渲染出登录后的主页
         page.wait_for_timeout(5000)
         
-        # 截取成功后的屏幕
+        # --- 核心新增：截取成功后的屏幕 ---
         screenshot_path = "success_screenshot.png"
         page.screenshot(path=screenshot_path)
         print(f"已保存登录截图: {screenshot_path}")
@@ -119,13 +91,11 @@ def run(playwright):
         current_time = get_beijing_time()
         success_msg = f"✅ <b>Vortexa 自动登录成功</b>\n任务已按时顺利执行完毕。\n🕒 时间: <code>{current_time}</code>"
         print(success_msg)
-        
-        # 发送 Tg 并同步更新 README 状态
+        # 将文本和截图一起发送
         send_telegram_message(success_msg, image_path=screenshot_path)
-        update_readme_time("✅ 成功")
 
     except TimeoutError:
-        # 遇到超时报错时也截图，方便排查风控或死链
+        # --- 核心新增：遇到超时报错时也截图，方便排查风控或死链 ---
         screenshot_path = "timeout_screenshot.png"
         page.screenshot(path=screenshot_path)
         print(f"已保存超时异常截图: {screenshot_path}")
@@ -133,18 +103,14 @@ def run(playwright):
         current_time = get_beijing_time()
         error_msg = f"⚠️ <b>Vortexa 自动登录异常</b>\n页面加载或元素定位超时，可能是网站结构更改、需要验证码验证或网络波动。\n🕒 时间: <code>{current_time}</code>"
         print(error_msg)
-        
         send_telegram_message(error_msg, image_path=screenshot_path)
-        update_readme_time("⚠️ 异常")
         
     except Exception as e:
         current_time = get_beijing_time()
         error_msg = f"❌ <b>Vortexa 自动登录失败</b>\n执行过程中发生未知代码异常:\n<code>{str(e)}</code>\n🕒 时间: <code>{current_time}</code>"
         print(error_msg)
-        
         # 代码级错误通常没法截图，直接发文本
         send_telegram_message(error_msg)
-        update_readme_time("❌ 失败")
         
     finally:
         browser.close()
